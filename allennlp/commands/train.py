@@ -497,10 +497,11 @@ def _train_worker(
     if dry_run:
         return None
 
+    logging.info("Loading pretrained model from experiment/pretrain_srl/best.th")
+    train_loop.trainer._load_model_state("experiment/pretrain_srl/best.th")
     try:
         if distributed:  # let the setup get ready for all the workers
             dist.barrier()
-
         metrics = train_loop.run()
     except KeyboardInterrupt:
         # if we have completed an epoch, try to create a model archive.
@@ -610,6 +611,7 @@ class TrainModel(Registrable):
         vocabulary: Lazy[Vocabulary] = Lazy(Vocabulary),
         datasets_for_vocab_creation: List[str] = None,
         validation_dataset_reader: DatasetReader = None,
+        aux_data_path: Any = None,
         validation_data_path: Any = None,
         validation_data_loader: Lazy[DataLoader] = None,
         test_data_path: Any = None,
@@ -708,9 +710,20 @@ class TrainModel(Registrable):
 
         """
         # Train data loader.
-        data_loaders: Dict[str, DataLoader] = {
-            "train": data_loader.construct(reader=dataset_reader, data_path=train_data_path)
-        }
+        data_loaders: Dict[str, DataLoader] = {}
+
+        # data_loaders["train"] = data_loader.construct(reader=dataset_reader, data_path=train_data_path)
+
+        # if aux_data_path is not None:
+        #     data_loaders["aux_train"] = data_loader.construct(reader=dataset_reader, data_path=aux_data_path)
+
+        # aux data loader.
+        if aux_data_path is not None:
+            data_loaders["aux_train"] = data_loader.construct(reader=dataset_reader, data_path=aux_data_path)
+            data_loaders["train"] = data_loader.construct(reader=dataset_reader, data_path=train_data_path, batches_per_epoch=len(data_loaders["aux_train"]))
+            logger.info("*---------- Extend length of training data set to %d ----------*",len(data_loaders["train"]))
+        else:
+            data_loaders["train"] = data_loader.construct(reader=dataset_reader, data_path=train_data_path)
 
         # Validation data loader.
         if validation_data_path is not None:
@@ -783,6 +796,7 @@ class TrainModel(Registrable):
             serialization_dir=serialization_dir,
             model=model_,
             data_loader=data_loaders["train"],
+            aux_data_loader=data_loaders.get("aux_train"),
             validation_data_loader=data_loaders.get("validation"),
             local_rank=local_rank,
             ddp_accelerator=ddp_accelerator,
