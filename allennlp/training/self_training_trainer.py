@@ -432,6 +432,7 @@ class SelfTrainingTrainer(Trainer):
                 aux_dict = self._pytorch_model(**aux_batch, self_training=True, weighted_self_training=self._weighted_self_training)
                 print('supervised loss: ',output_dict["loss"].item())
                 if self._weighted_self_training:
+                    output_dict['disagr_score'] = aux_dict['disagr_score']
                     print("weighted self training loss: ",self._mix_ratio*aux_dict['loss'].item())
                 else:
                     print("self training loss: ",self._mix_ratio*aux_dict['loss'].item())
@@ -492,6 +493,7 @@ class SelfTrainingTrainer(Trainer):
         regularization_penalty = self.model.get_regularization_penalty()
 
         train_loss = 0.0
+        train_disagr_score = 0.0
         train_reg_loss = None if regularization_penalty is None else 0.0
         batch_reg_loss = None if regularization_penalty is None else 0.0
 
@@ -545,6 +547,7 @@ class SelfTrainingTrainer(Trainer):
                 self.optimizer.zero_grad()
 
                 batch_loss = 0.0
+                batch_disagr_score = 0.0
                 batch_group_outputs = []
                 for batch in batch_group:
                     # logger.info("no aux data is provided")
@@ -676,6 +679,7 @@ class SelfTrainingTrainer(Trainer):
                 self.optimizer.zero_grad()
 
                 batch_loss = 0.0
+                batch_disagr_score = 0.0
                 batch_group_outputs = []
                 for batch, aux_batch in zip(batch_group,aux_group):
                     if self._distributed:
@@ -708,6 +712,16 @@ class SelfTrainingTrainer(Trainer):
                         loss = loss / len(batch_group)
                         # print('batch averaged outputs loss',loss.data, len(batch_group))
 
+                        #------------ add disagreement scores -----------#
+                        # disagr_score = None
+                        if "disagr_score" in batch_outputs:
+                            disagr_score = batch_outputs["disagr_score"]
+                            disagr_score = disagr_score / len(batch_group)
+                            batch_disagr_score += disagr_score.item()
+
+                        #------------------------------------------------#
+
+
                         batch_loss += loss.item()
                         if reg_loss is not None:
                             reg_loss = reg_loss / len(batch_group)
@@ -729,6 +743,8 @@ class SelfTrainingTrainer(Trainer):
                     continue
 
                 train_loss += batch_loss
+
+                train_disagr_score += batch_disagr_score
 
                 batch_grad_norm = self.rescale_gradients()
 
@@ -758,6 +774,8 @@ class SelfTrainingTrainer(Trainer):
                     batch_loss,
                     batch_reg_loss,
                     self._batches_in_epoch_completed,
+                    total_disagr_score=train_disagr_score,
+                    batch_disagr_score=batch_disagr_score,
                     world_size=self._world_size,
                     cuda_device=self.cuda_device,
                 )
@@ -784,6 +802,7 @@ class SelfTrainingTrainer(Trainer):
                     self._checkpointer.maybe_save_checkpoint(
                         self, self._epochs_completed, self._batches_in_epoch_completed
                     )
+                break
 
         if self._distributed and not done_early:
             logger.info(
@@ -812,6 +831,8 @@ class SelfTrainingTrainer(Trainer):
                 batch_loss=None,
                 batch_reg_loss=None,
                 num_batches=self._batches_in_epoch_completed,
+                total_disagr_score=train_disagr_score,
+                batch_disagr_score=batch_disagr_score,
                 reset=True,
                 world_size=self._world_size,
                 cuda_device=self.cuda_device,
@@ -856,6 +877,10 @@ class SelfTrainingTrainer(Trainer):
             val_batch_loss = 0.0
             val_reg_loss = None if regularization_penalty is None else 0.0
             val_batch_reg_loss = None if regularization_penalty is None else 0.0
+
+            val_batch_disagr_score = None
+            val_disagr_score = 0.0
+
             done_early = False
             for batch in val_generator_tqdm:
                 if self._distributed:
@@ -881,6 +906,9 @@ class SelfTrainingTrainer(Trainer):
                     batch_outputs = self.batch_outputs(batch, for_training=False)
                     loss = batch_outputs.get("loss")
                     reg_loss = batch_outputs.get("reg_loss")
+
+                    disagr_score = batch_outputs.get("disagr_score")
+
                     if loss is not None:
                         # You shouldn't necessarily have to compute a loss for validation, so we allow for
                         # `loss` to be None.  We need to be careful, though - `batches_this_epoch` is
@@ -893,6 +921,10 @@ class SelfTrainingTrainer(Trainer):
                         if reg_loss is not None:
                             val_batch_reg_loss = reg_loss.item()
                             val_reg_loss += val_batch_reg_loss  # type: ignore
+                        if disagr_score is not None:
+                            val_batch_disagr_score = disagr_score.item()
+                            val_disagr_score += val_batch_disagr_score
+
 
                 # Update the description with the latest metrics
                 val_metrics = training_util.get_metrics(
@@ -902,6 +934,8 @@ class SelfTrainingTrainer(Trainer):
                     val_batch_loss,
                     val_batch_reg_loss,
                     batches_this_epoch,
+                    total_disagr_score=val_disagr_score,
+                    batch_disagr_score=val_batch_disagr_score,
                     world_size=self._world_size,
                     cuda_device=self.cuda_device,
                 )

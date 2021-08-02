@@ -260,6 +260,8 @@ def get_metrics(
     batch_loss: Optional[float],
     batch_reg_loss: Optional[float],
     num_batches: int,
+    total_disagr_score: float = None,
+    batch_disagr_score: float = None,
     reset: bool = False,
     world_size: int = 1,
     cuda_device: Union[int, torch.device] = torch.device("cpu"),
@@ -278,6 +280,10 @@ def get_metrics(
         if batch_reg_loss is not None:
             metrics["batch_reg_loss"] = batch_reg_loss
         metrics["reg_loss"] = float(total_reg_loss / num_batches) if num_batches > 0 else 0.0
+    if total_disagr_score is not None:
+        if batch_disagr_score is not None:
+            metrics["batch_disagr_score"] = batch_disagr_score
+        metrics["disagr_score"] = float(total_disagr_score / num_batches) if num_batches > 0 else 0.0
 
     return metrics
 
@@ -354,9 +360,12 @@ def evaluate(
         total_weight = 0.0
 
         for batch in generator_tqdm:
+            # print('gold: ',[ example_metadata["gold_tags"] for example_metadata in batch["metadata"] ][0])
             batch_count += 1
             batch = nn_util.move_to_device(batch, cuda_device)
             output_dict = model(**batch)
+            # print("pred: ",sanitize(model.make_output_human_readable(output_dict))['tags'][0])
+            # print("pred word_piece: ",sanitize(model.make_output_human_readable(output_dict))['wordpiece_tags'][0])
             loss = output_dict.get("loss")
 
             metrics = model.get_metrics()
@@ -394,7 +403,14 @@ def evaluate(
             generator_tqdm.set_description(description, refresh=False)
 
             if predictions_file is not None:
-                predictions = json.dumps(sanitize(model.make_output_human_readable(output_dict)))
+                human_readable_output = model.make_output_human_readable(output_dict)
+                saved_predicted_output = {}
+                saved_predicted_output["tokens"] = human_readable_output["words"]
+                saved_predicted_output["verb"] = human_readable_output["verb"]
+                saved_predicted_output["gold_tags"] = human_readable_output["gold_tags"]
+                saved_predicted_output["tags"] = human_readable_output["tags"]
+                saved_predicted_output["parse_spans"] = human_readable_output["parse_spans"]
+                predictions = json.dumps(sanitize(saved_predicted_output))
                 predictions_file.write(predictions + "\n")
 
         if predictions_file is not None:
