@@ -130,7 +130,7 @@ def evaluate_from_args(args: argparse.Namespace) -> Dict[str, Any]:
 
     # Load the evaluation data
     # change this back to dev_dataset_reader 
-    dataset_reader = archive.validation_dataset_reader
+    dataset_reader = archive.dataset_reader
 
     evaluation_data_path = args.input_file
     logger.info("Reading evaluation data from %s", evaluation_data_path)

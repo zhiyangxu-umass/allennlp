@@ -498,8 +498,8 @@ def _train_worker(
         return None
 
     #--------- comment this if does not want to load old model ----------------#
-    logging.info("Loading pretrained model from experiment/pretrain_srl/best.th")
-    train_loop.trainer._load_model_state("experiment/pretrain_srl/best.th")
+    # logging.info("Loading pretrained model from experiment/pretrain_srl/best.th")
+    # train_loop.trainer._load_model_state("experiment/pretrain_srl_10/best.th")
 
     try:
         if distributed:  # let the setup get ready for all the workers
@@ -778,9 +778,15 @@ class TrainModel(Registrable):
 
         vocabulary_ = vocabulary.construct(instances=instance_generator)
 
+        # load vocab from pretrained model
+        vocabulary_.set_from_file(filename='experiment/pretrain_srl_50_frame/vocabulary/labels.txt',is_padded=False,namespace='labels')
+
         model_ = model.construct(
             vocab=vocabulary_, serialization_dir=serialization_dir, ddp_accelerator=ddp_accelerator
         )
+
+        # load model from pretrained model
+        model_.load_state_dict(torch.load("experiment/pretrain_srl_50_frame/best.th"))
 
         # Initializing the model can have side effect of expanding the vocabulary.
         # Save the vocab only in the primary. In the degenerate non-distributed

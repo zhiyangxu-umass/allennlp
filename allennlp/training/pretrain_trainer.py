@@ -34,7 +34,7 @@ from allennlp.training import util as training_util
 logger = logging.getLogger(__name__)
 
 
-@Trainer.register("self_training", constructor="from_partial_objects")
+@Trainer.register("self_training_pretrain", constructor="from_partial_objects")
 class SelfTrainingTrainer(Trainer):
     """
     A trainer for doing supervised learning with gradient descent. It just takes a labeled dataset
@@ -530,8 +530,7 @@ class SelfTrainingTrainer(Trainer):
 
         # if no aux data provided or on warm up step
         # if self.aux_data_loader is None or warm_up:
-        # if True:
-        if self.aux_data_loader is None or warm_up:
+        if True:
             for batch_group in batch_group_generator_tqdm:
                 if done_early:
                     break

@@ -34,7 +34,7 @@ from allennlp.training import util as training_util
 logger = logging.getLogger(__name__)
 
 
-@Trainer.register("self_training", constructor="from_partial_objects")
+@Trainer.register("self_training_backward", constructor="from_partial_objects")
 class SelfTrainingTrainer(Trainer):
     """
     A trainer for doing supervised learning with gradient descent. It just takes a labeled dataset
@@ -391,90 +391,49 @@ class SelfTrainingTrainer(Trainer):
         Does a forward pass on the given batch and returns the output dictionary that the model
         returns, after adding any specified regularization penalty to the loss (if training).
         """
-        print(" ")
-        if aux_batch is None:
-            output_dict = self._pytorch_model(**batch)
-            if for_training:
-                try:
-                    assert "loss" in output_dict
-                    regularization_penalty = self.model.get_regularization_penalty()
+        print(' ')
+        output_dict = self._pytorch_model(**batch)
+        if for_training:
+            try:
+                assert "loss" in output_dict
+                regularization_penalty = self.model.get_regularization_penalty()
 
-                    if regularization_penalty is not None:
-                        output_dict["reg_loss"] = regularization_penalty
-                        output_dict["loss"] += regularization_penalty
-
-                except AssertionError:
-                    if for_training:
-                        raise RuntimeError(
-                            "The model you are trying to optimize does not contain a"
-                            " 'loss' key in the output of model.forward(inputs)."
-                        )
-            return output_dict
-        else:
-            assert for_training
-            if not self._no_gold:
-                output_dict = self._pytorch_model(**batch)
-                if for_training:
-                    try:
-                        assert "loss" in output_dict
-                        regularization_penalty = self.model.get_regularization_penalty()
-
-                        if regularization_penalty is not None:
-                            output_dict["reg_loss"] = regularization_penalty
-                            output_dict["loss"] += regularization_penalty
-
-                    except AssertionError:
-                        if for_training:
-                            raise RuntimeError(
-                                "The model you are trying to optimize does not contain a"
-                                " 'loss' key in the output of model.forward(inputs)."
-                            )
-                aux_dict = self._pytorch_model(**aux_batch, self_training=True, weighted_self_training=self._weighted_self_training)
+                if regularization_penalty is not None:
+                    output_dict["reg_loss"] = regularization_penalty
+                    output_dict["loss"] += regularization_penalty
                 print('supervised loss: ',output_dict["loss"].item())
-                if self._weighted_self_training:
-                    output_dict['disagr_score'] = aux_dict['disagr_score']
-                    print("weighted self training loss: ",self._mix_ratio*aux_dict['loss'].item())
-                else:
-                    print("self training loss: ",self._mix_ratio*aux_dict['loss'].item())
-                try:
-                    assert "loss" in aux_dict
-                    output_dict["loss"] += self._mix_ratio * aux_dict["loss"]
 
-                    aux_regularization_penalty = self.model.get_regularization_penalty()
-                    if aux_regularization_penalty is not None:
-                        output_dict["reg_loss"] += self._mix_ratio * aux_regularization_penalty
-                        output_dict["loss"] += self._mix_ratio * aux_regularization_penalty
-
-                except AssertionError:
-                    if for_training:
-                        raise RuntimeError(
-                            "The model you are trying to optimize does not contain a"
-                            " 'loss' key in the output of model.forward(inputs)."
-                        )
-            else:
-                output_dict = self._pytorch_model(**aux_batch, self_training=True, weighted_self_training=self._weighted_self_training)
-                if self._weighted_self_training:
-                    print("weighted self training loss: ",output_dict['loss'].item())
-                else:
-                    print("self training loss: ",output_dict['loss'].item())
+            except AssertionError:
                 if for_training:
-                    try:
-                        assert "loss" in output_dict
-                        regularization_penalty = self.model.get_regularization_penalty()
-
-                        if regularization_penalty is not None:
-                            output_dict["reg_loss"] = regularization_penalty
-                            output_dict["loss"] += regularization_penalty
-
-                    except AssertionError:
-                        if for_training:
-                            raise RuntimeError(
-                                "The model you are trying to optimize does not contain a"
-                                " 'loss' key in the output of model.forward(inputs)."
-                            )
-
-        
+                    raise RuntimeError(
+                        "The model you are trying to optimize does not contain a"
+                        " 'loss' key in the output of model.forward(inputs)."
+                    )
         return output_dict
+
+    def _aux_batch_output(self, aux_batch: TensorDict = None):
+        aux_dict = self._pytorch_model(**aux_batch, self_training=True, weighted_self_training=self._weighted_self_training)
+        if self._weighted_self_training:
+            aux_dict['disagr_score'] = aux_dict['disagr_score']
+            print("weighted self training loss: ",self._mix_ratio*aux_dict['loss'].item())
+        else:
+            print("self training loss: ",self._mix_ratio*aux_dict['loss'].item())
+        try:
+            assert "loss" in aux_dict
+            aux_dict["loss"] = self._mix_ratio * aux_dict["loss"]
+
+            aux_regularization_penalty = self.model.get_regularization_penalty()
+            if aux_regularization_penalty is not None:
+                aux_dict["reg_loss"] = self._mix_ratio * aux_regularization_penalty
+                aux_dict["loss"] += self._mix_ratio * aux_regularization_penalty
+
+        except AssertionError:
+            if for_training:
+                raise RuntimeError(
+                    "The model you are trying to optimize does not contain a"
+                    " 'loss' key in the output of model.forward(inputs)."
+                )
+        return aux_dict
 
     def _train_epoch(self, epoch: int, warm_up: bool=False) -> Dict[str, float]:
         """
@@ -702,7 +661,7 @@ class SelfTrainingTrainer(Trainer):
                             break
 
                     with amp.autocast(self._use_amp):
-                        batch_outputs = self.batch_outputs(batch, aux_batch=aux_batch, for_training=True)
+                        batch_outputs = self.batch_outputs(batch, for_training=True)
                         batch_group_outputs.append(batch_outputs)
                         loss = batch_outputs["loss"]
                         # print('batch outputs loss',loss.data)
@@ -714,30 +673,49 @@ class SelfTrainingTrainer(Trainer):
 
                         #------------ add disagreement scores -----------#
                         # disagr_score = None
-                        if "disagr_score" in batch_outputs:
-                            disagr_score = batch_outputs["disagr_score"]
-                            disagr_score = disagr_score / len(batch_group)
-                            batch_disagr_score += disagr_score.item()
+                        # if "disagr_score" in batch_outputs:
+                        #     disagr_score = batch_outputs["disagr_score"]
+                        #     disagr_score = disagr_score / len(batch_group)
+                        #     batch_disagr_score += disagr_score.item()
 
                         #------------------------------------------------#
-
-
                         batch_loss += loss.item()
                         if reg_loss is not None:
                             reg_loss = reg_loss / len(batch_group)
                             batch_reg_loss = reg_loss.item()
                             train_reg_loss += batch_reg_loss  # type: ignore
 
-                    backward_called = False
-                    for callback in self._callbacks:
-                        backward_called |= callback.on_backward(self, batch_outputs, backward_called)
-                    if not backward_called:
-                        if self._scaler is not None:
-                            MixedPrecisionBackwardCallback(self._serialization_dir).on_backward(
-                                self, batch_outputs, backward_called
-                            )
-                        else:
-                            loss.backward()
+                    loss.backward()
+
+                    # backward aux loss
+                    with amp.autocast(self._use_amp):
+                        aux_batch_outputs = self._aux_batch_output(aux_batch)
+                        aux_loss = aux_batch_outputs["loss"]
+                        # print('batch outputs loss',loss.data)
+                        # aux_reg_loss = aux_batch_outputs.get("reg_loss")
+                        # if torch.isnan(loss):
+                        #     raise ValueError("nan loss encountered")
+                        # loss = loss / len(batch_group)
+                        # print('batch averaged outputs loss',loss.data, len(batch_group))
+
+                        #------------ add disagreement scores -----------#
+                        # disagr_score = None
+                        if "disagr_score" in aux_batch_outputs:
+                            disagr_score = aux_batch_outputs["disagr_score"]
+                            disagr_score = disagr_score / len(batch_group)
+                            batch_disagr_score += disagr_score.item()
+
+                        #------------------------------------------------#
+
+
+                        batch_loss += aux_loss.item()
+                        # if reg_loss is not None:
+                        #     reg_loss = reg_loss / len(batch_group)
+                        #     batch_reg_loss = reg_loss.item()
+                        #     train_reg_loss += batch_reg_loss  # type: ignore
+
+                    aux_loss.backward()
+                    
 
                 if len(batch_group_outputs) <= 0:
                     continue
